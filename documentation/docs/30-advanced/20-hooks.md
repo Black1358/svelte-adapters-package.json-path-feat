@@ -67,6 +67,13 @@ export async function handle({ event, resolve }) {
 	event.locals.user = await getUserInformation(event.cookies.get('sessionid'));
 
 	const response = await resolve(event);
+
+	// Note that modifying response headers isn't always safe.
+	// Response objects can have immutable headers
+	// (e.g. Response.redirect() returned from an endpoint).
+	// Modifying immutable headers throws a TypeError.
+	// In that case, clone the response or avoid creating a
+	// response object with immutable headers.
 	response.headers.set('x-custom-header', 'potato');
 
 	return response;
@@ -99,7 +106,7 @@ Note that `resolve(...)` will never throw an error, it will always return a `Pro
 
 ### handleFetch
 
-This function allows you to modify (or replace) a `fetch` request that happens inside a `load` or `action` function that runs on the server (or during pre-rendering).
+This function allows you to modify (or replace) a `fetch` request that happens inside a `load`, `action` or `handle` function that runs on the server (or during prerendering).
 
 For example, your `load` function might make a request to a public URL like `https://api.yourapp.com` when the user performs a client-side navigation to the respective page, but during SSR it might make sense to hit the API directly (bypassing whatever proxies and load balancers sit between it and the public internet).
 
@@ -146,7 +153,7 @@ The following can be added to `src/hooks.server.js` _and_ `src/hooks.client.js`:
 
 ### handleError
 
-If an [unexpected error](errors#Unexpected-errors) is thrown during loading or rendering, this function will be called with the `error`, `event`, `status` code and `message`. This allows for two things:
+If an [unexpected error](errors#Unexpected-errors) is thrown during loading, rendering, or from an endpoint, this function will be called with the `error`, `event`, `status` code and `message`. This allows for two things:
 
 - you can log the error
 - you can generate a custom representation of the error that is safe to show to users, omitting sensitive details like messages and stack traces. The returned value, which defaults to `{ message }`, becomes the value of `$page.error`.
@@ -291,6 +298,29 @@ export function reroute({ url }) {
 The `lang` parameter will be correctly derived from the returned pathname.
 
 Using `reroute` will _not_ change the contents of the browser's address bar, or the value of `event.url`.
+
+Since version 2.18, the `reroute` hook can be asynchronous, allowing it to (for example) fetch data from your backend to decide where to reroute to. Use this carefully and make sure it's fast, as it will delay navigation otherwise. If you need to fetch data, use the `fetch` provided as an argument. It has the [same benefits](load#Making-fetch-requests) as the `fetch` provided to `load` functions, with the caveat that `params` and `id` are unavailable to [`handleFetch`](#Server-hooks-handleFetch) because the route is not yet known.
+
+```js
+/// file: src/hooks.js
+// @errors: 2345`
+// @errors: 2304
+
+/** @type {import('@sveltejs/kit').Reroute} */
+export async function reroute({ url, fetch }) {
+	// Ask a special endpoint within your app about the destination
+	if (url.pathname === '/api/reroute') return;
+
+	const api = new URL('/api/reroute', url);
+	api.searchParams.set('pathname', url.pathname);
+
+	const result = await fetch(api).then(r => r.json());
+	return result.pathname;
+}
+```
+
+
+> [!NOTE] `reroute` is considered a pure, idempotent function. As such, it must always return the same output for the same input and not have side effects. Under these assumptions, SvelteKit caches the result of `reroute` on the client so it is only called once per unique URL.
 
 ### transport
 
